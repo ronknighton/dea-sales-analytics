@@ -245,8 +245,9 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
-                # Restrict to this specific repo — update <org>/<repo> before deploying
-                token.actions.githubusercontent.com:sub: repo:<org>/<repo>:*
+                # Immutable subject claim format (GitHub, repos created after
+                # July 15, 2026): repo:OWNER@OWNER-ID/REPO@REPO-ID:*
+                token.actions.githubusercontent.com:sub: repo:ronknighton@28845975/dea-sales-analytics@1345365015:*
       Policies:
         - PolicyName: DeployExtractionLambda
           PolicyDocument:
