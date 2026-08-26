@@ -255,8 +255,12 @@ Resources:
               - Effect: Allow
                 Action:
                   - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
                   - lambda:GetFunction
                 Resource: !GetAtt ExtractionLambda.Arn
+              - Effect: Allow
+                Action: iam:GetRole
+                Resource: !GetAtt ExtractionLambdaRole.Arn
               - Effect: Allow
                 Action: cloudformation:*
                 Resource: '*'
