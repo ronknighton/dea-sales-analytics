@@ -74,56 +74,91 @@ def set_checkpoint(table: str, new_checkpoint: str):
     )
 
 
+BATCH_SIZE = 5000  # rows per batch — keeps memory bounded regardless of table size
+
+
 def extract_table(conn, table: str) -> dict:
-    """Query one table for rows newer than its checkpoint, write them to
-    S3 as NDJSON, and return a summary dict for logging/monitoring.
+    """Query one table for rows newer than its checkpoint, in fixed-size
+    batches, writing each batch to its own S3 file immediately. This keeps
+    memory usage bounded regardless of how many rows are pending — critical
+    for the first-ever run of a table, which pulls full history (e.g.
+    ~194K rows for lead_activites_raw) rather than a normal day's ~6-7K
+    increment. A single unbatched query previously caused a Lambda
+    Runtime.OutOfMemory error on exactly this first-run backfill.
+
     Raises on any failure rather than swallowing errors, so a failed
     extraction shows up as a Lambda error (triggers the CloudWatch alarm
-    per Solution Design Doc Section 6.1) instead of failing silently."""
+    per Solution Design Doc Section 6.1) instead of failing silently.
+
+    The checkpoint only advances after ALL batches for this table succeed
+    — a failure partway through a large backfill does not partially
+    advance the checkpoint, so a retry re-pulls from the original
+    checkpoint rather than leaving a gap."""
     checkpoint = get_checkpoint(table)
-
-    rows = conn.run(
-        f"SELECT raw_data, insert_date FROM {SCHEMA}.{table} "
-        f"WHERE insert_date > :checkpoint ORDER BY insert_date",
-        checkpoint=checkpoint,
-    )
-
-    if not rows:
-        return {"table": table, "rows_extracted": 0, "checkpoint_advanced": False}
-
-    # Batch to NDJSON — one JSON object per line, matching the raw_data
-    # structure exactly as it exists in Postgres (no transformation).
-    ndjson_lines = []
-    latest_insert_date = checkpoint
-    for raw_data, insert_date in rows:
-        ndjson_lines.append(json.dumps(raw_data))
-        insert_date_str = insert_date.isoformat(sep=" ")
-        if insert_date_str > latest_insert_date:
-            latest_insert_date = insert_date_str
-
-    ndjson_body = "\n".join(ndjson_lines)
 
     run_timestamp = datetime.now(timezone.utc)
     dt_partition = run_timestamp.strftime("%Y-%m-%d")
     file_timestamp = run_timestamp.strftime("%Y%m%d_%H%M%S")
-    s3_key = f"raw/{table}/dt={dt_partition}/{table}_{file_timestamp}.json"
 
-    s3_client.put_object(
-        Bucket=S3_BUCKET,
-        Key=s3_key,
-        Body=ndjson_body.encode("utf-8"),
-        ContentType="application/x-ndjson",
-    )
+    total_rows = 0
+    latest_insert_date = checkpoint
+    batch_num = 0
+    s3_keys = []
+    offset = 0
 
-    # Only advance the checkpoint after the S3 write succeeds.
+    while True:
+        rows = conn.run(
+            f"SELECT raw_data, insert_date FROM {SCHEMA}.{table} "
+            f"WHERE insert_date > :checkpoint ORDER BY insert_date "
+            f"LIMIT :limit OFFSET :offset",
+            checkpoint=checkpoint, limit=BATCH_SIZE, offset=offset,
+        )
+
+        if not rows:
+            break
+
+        # Build and upload this batch only — discarded from memory once
+        # the S3 write completes, before the next batch is even fetched.
+        ndjson_lines = []
+        for raw_data, insert_date in rows:
+            ndjson_lines.append(json.dumps(raw_data))
+            insert_date_str = insert_date.isoformat(sep=" ")
+            if insert_date_str > latest_insert_date:
+                latest_insert_date = insert_date_str
+
+        ndjson_body = "\n".join(ndjson_lines)
+        s3_key = f"raw/{table}/dt={dt_partition}/{table}_{file_timestamp}_batch{batch_num:04d}.json"
+
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=s3_key,
+            Body=ndjson_body.encode("utf-8"),
+            ContentType="application/x-ndjson",
+        )
+
+        total_rows += len(rows)
+        s3_keys.append(s3_key)
+        print(f"  {table} batch {batch_num}: {len(rows)} rows -> {s3_key}")
+
+        if len(rows) < BATCH_SIZE:
+            break  # last page was partial — no more rows to fetch
+
+        offset += BATCH_SIZE
+        batch_num += 1
+
+    if total_rows == 0:
+        return {"table": table, "rows_extracted": 0, "checkpoint_advanced": False}
+
+    # Only advance the checkpoint after every batch succeeded.
     set_checkpoint(table, latest_insert_date)
 
     return {
         "table": table,
-        "rows_extracted": len(rows),
+        "rows_extracted": total_rows,
+        "batches": batch_num + 1,
         "checkpoint_advanced": True,
         "new_checkpoint": latest_insert_date,
-        "s3_key": s3_key,
+        "s3_keys": s3_keys,
     }
 
 
