@@ -1,0 +1,118 @@
+
+======================================================================
+1. CUSTOM ACTIVITY CATALOG (sales_raw.custom_activites_raw)
+======================================================================
+  Found 28 activity type definitions:
+
+    - 0) Pipeline Update
+    - 1) Prospecting Activity
+    - 10) Call Confirmation Activity
+    - 11) Post-Sale Activity
+    - 12) Onboarding Complete
+    - 13) New Deposit
+    - 14) Backend Sale
+    - 15) Refund Request Initiated
+    - 16) CSM Prospecting Activity
+    - 17) CSM Strategy Call Activity
+    - 18) Office Hour Activity
+    - 2) Prospecting Follow Up
+    - 3) Triage Call
+    - 4) Triage Call Follow Up
+    - 5) Strategy Call
+    - 6) Strategy Call Follow Up
+    - 7) New Sale
+    - 8) New Sale [Custom Payment Plan]
+    - 9) Additional Cash Collected
+    - Backend Sale Pitch [ARCHIVED]
+    - Fathom Call
+    - Lead Fi
+    - New Referral Generated
+    - Payment Transaction
+    - Referral Ask [ARCHIVED]
+    - Refund Decision
+    - Setter Hand Off Notes
+    - Slack User Removal
+
+======================================================================
+2. OUTCOME VALUE SCAN (sales_raw.lead_activites_raw, last 500 rows)
+======================================================================
+  Parsing 500 rows...
+
+  Distinct outcome-like values found (key_path -> value -> count):
+
+    [data.custom.cf_Q2fsrD8VpPaunZLtyiy7P3vG6qJTv0w1ESmlhdHU2ra] '3. Follow Up'  (x42)
+    [data.custom.cf_Q2fsrD8VpPaunZLtyiy7P3vG6qJTv0w1ESmlhdHU2ra] '2. Strategy Call Scheduled'  (x39)
+    [data.custom.cf_dhJR4N7Rm6czuJthYGJP6KqUcuOzi7fqApGI7puWnMo] '1. Follow Up'  (x33)
+    [data.custom.cf_h3tYb9J6yPK7J4PMExDGsEqPCf8kBGBrRNIur2Dm5aN] '6. No Show'  (x29)
+    [data.custom.cf_hhJuhxsj1vjvZITKKzfnxtCz1fnRFkC1DPiEPp4LyQc] '2. Future Close < 10 Days'  (x27)
+    [data.custom.cf_hhJuhxsj1vjvZITKKzfnxtCz1fnRFkC1DPiEPp4LyQc] '0. Strategy Call Scheduled'  (x26)
+    [data.custom.cf_dhJR4N7Rm6czuJthYGJP6KqUcuOzi7fqApGI7puWnMo] '4. No Show'  (x20)
+    [data.custom.cf_h3tYb9J6yPK7J4PMExDGsEqPCf8kBGBrRNIur2Dm5aN] '1. Strategy Call Scheduled'  (x20)
+    [data.custom.cf_Q2fsrD8VpPaunZLtyiy7P3vG6qJTv0w1ESmlhdHU2ra] '4. Unqualified'  (x11)
+    [data.custom.cf_Q2fsrD8VpPaunZLtyiy7P3vG6qJTv0w1ESmlhdHU2ra] '6. Not Interested'  (x9)
+    [data.custom.cf_hhJuhxsj1vjvZITKKzfnxtCz1fnRFkC1DPiEPp4LyQc] '1. Offer Not Presented'  (x8)
+    [data.custom.cf_Vg2LYILzny6yFvcSNpGUYXNVVbDGMu8pDEJsEx9xV13] '1. Follow Up'  (x6)
+    [data.custom.cf_h3tYb9J6yPK7J4PMExDGsEqPCf8kBGBrRNIur2Dm5aN] '2. Unqualified'  (x5)
+    [data.custom.cf_hhJuhxsj1vjvZITKKzfnxtCz1fnRFkC1DPiEPp4LyQc] '3. Short Term Farm- 1 Month'  (x5)
+    [data.custom.cf_dhJR4N7Rm6czuJthYGJP6KqUcuOzi7fqApGI7puWnMo] '5. Reschedule'  (x4)
+    [data.custom.cf_dhJR4N7Rm6czuJthYGJP6KqUcuOzi7fqApGI7puWnMo] '2. Admin Cancel'  (x3)
+    [data.custom.cf_hhJuhxsj1vjvZITKKzfnxtCz1fnRFkC1DPiEPp4LyQc] '6. Long Term Farm'  (x2)
+    [data.custom.cf_Q2fsrD8VpPaunZLtyiy7P3vG6qJTv0w1ESmlhdHU2ra] '1. Triage Booked'  (x2)
+    [data.custom.cf_dhJR4N7Rm6czuJthYGJP6KqUcuOzi7fqApGI7puWnMo] '6. Sale'  (x2)
+    [data.custom.cf_h3tYb9J6yPK7J4PMExDGsEqPCf8kBGBrRNIur2Dm5aN] '8. Cancel'  (x2)
+    [data.custom.cf_dhJR4N7Rm6czuJthYGJP6KqUcuOzi7fqApGI7puWnMo] '3. Cancel- Not Interested'  (x2)
+    [data.custom.cf_dhJR4N7Rm6czuJthYGJP6KqUcuOzi7fqApGI7puWnMo] '8. Cancel- Nurture'  (x1)
+    [data.custom.cf_Q2fsrD8VpPaunZLtyiy7P3vG6qJTv0w1ESmlhdHU2ra] '5. Inaccurate Contact'  (x1)
+    [data.custom.cf_h3tYb9J6yPK7J4PMExDGsEqPCf8kBGBrRNIur2Dm5aN] '3. Follow Up < 10 Days'  (x1)
+    [data.custom.cf_h3tYb9J6yPK7J4PMExDGsEqPCf8kBGBrRNIur2Dm5aN] '7. Reschedule'  (x1)
+    [data.custom.cf_h3tYb9J6yPK7J4PMExDGsEqPCf8kBGBrRNIur2Dm5aN] '5. Long Term Follow Up'  (x1)
+    [data.custom.cf_hhJuhxsj1vjvZITKKzfnxtCz1fnRFkC1DPiEPp4LyQc] '4. Short Term Farm- 1-3 Months'  (x1)
+    [data.custom.cf_Vg2LYILzny6yFvcSNpGUYXNVVbDGMu8pDEJsEx9xV13] '5. Sale'  (x1)
+    [data.custom.cf_Vg2LYILzny6yFvcSNpGUYXNVVbDGMu8pDEJsEx9xV13] '3. No Show'  (x1)
+
+  --- Checking specifically for No Show / Cancel-Nurture variants ---
+    [data.custom.cf_h3tYb9J6yPK7J4PMExDGsEqPCf8kBGBrRNIur2Dm5aN] '6. No Show'  (x29)
+    [data.custom.cf_dhJR4N7Rm6czuJthYGJP6KqUcuOzi7fqApGI7puWnMo] '4. No Show'  (x20)
+    [data.custom.cf_dhJR4N7Rm6czuJthYGJP6KqUcuOzi7fqApGI7puWnMo] '8. Cancel- Nurture'  (x1)
+    [data.custom.cf_dhJR4N7Rm6czuJthYGJP6KqUcuOzi7fqApGI7puWnMo] '2. Admin Cancel'  (x3)
+    [data.custom.cf_h3tYb9J6yPK7J4PMExDGsEqPCf8kBGBrRNIur2Dm5aN] '8. Cancel'  (x2)
+    [data.custom.cf_dhJR4N7Rm6czuJthYGJP6KqUcuOzi7fqApGI7puWnMo] '3. Cancel- Not Interested'  (x2)
+    [data.custom.cf_Vg2LYILzny6yFvcSNpGUYXNVVbDGMu8pDEJsEx9xV13] '3. No Show'  (x1)
+
+======================================================================
+3. USER EMAIL DOMAIN CHECK (sales_raw.close_crm_users_raw, last 200 rows)
+======================================================================
+
+  Email domains found:
+    dataengineeracademy.com: 74458
+    gmail.com: 1400
+    hardlyselling.com: 600
+    drutm.com: 400
+    hardleyselling.com: 400
+    dmsetting.com: 400
+    remoterep.com: 400
+    mdmelite.com: 200
+    dataengineeracadmy.com: 200
+    douglasjames.com: 200
+    datanengineeracademy.com: 200
+    advertize.io: 200
+    scalableconversions.com: 200
+    ethicalscaling.com: 200
+    bearworks.com: 200
+    douglasjames.co: 200
+    shanehummus.com: 200
+    mookastores.com: 200
+    elitenorthmarketing.com: 200
+    acquisition.com: 200
+    kixie.com: 200
+    xplode.ai: 200
+    ecomcapital.com: 200
+    thomasmitchellcopywriting.com: 200
+
+  Roles found:
+
+  If one domain stands out as clearly 'internal' (e.g. matches DEA's
+  own domain rather than a customer/business domain), that's your
+  candidate source field for DEA_INTERNAL_NAME/EMAIL. If all users
+  share one domain or nothing stands out, this likely isn't
+  derivable from Postgres alone -- take that back to the SME.
