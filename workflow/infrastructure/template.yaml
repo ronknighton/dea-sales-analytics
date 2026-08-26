@@ -1,0 +1,272 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Sales Analytics Pipeline — Extraction Layer (Postgres -> S3).
+  Deploys the extraction Lambda, its schedule, checkpoint storage, and
+  failure alerting per Solution Design Doc Sections 4.1 and 6.1.
+  Does NOT create a GitHub OIDC provider — this account already has one
+  (registered during the Global Partners capstone). This template
+  references the existing provider ARN in the deploy role's trust policy.
+
+Parameters:
+  DBHost:
+    Type: String
+    Description: Postgres RDS hostname (no protocol prefix, no trailing slash)
+  DBName:
+    Type: String
+    Default: dea_analytics_dev
+  DBUser:
+    Type: String
+    Default: student_user
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: >
+      Postgres password. Passed at deploy time via GitHub Actions secrets —
+      never committed to the repository or written into this template's
+      defaults.
+  S3BucketName:
+    Type: String
+    Description: S3 bucket for raw/ landing zone (must already exist or be created separately)
+  AlertEmail:
+    Type: String
+    Description: Email address for CloudWatch alarm notifications on extraction failure
+  ExistingGitHubOIDCProviderArn:
+    Type: String
+    Description: >
+      ARN of the GitHub Actions OIDC provider already registered in this
+      AWS account (from the Global Partners capstone). Do not create a new
+      AWS::IAM::OIDCProvider resource — it will fail with AlreadyExists.
+
+Resources:
+
+  # ---------------------------------------------------------------------
+  # Secrets Manager — Postgres credentials, never stored in plaintext
+  # anywhere in source control
+  # ---------------------------------------------------------------------
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: sales-analytics-pipeline/postgres-credentials
+      Description: Postgres connection credentials for the extraction Lambda
+      SecretString: !Sub |
+        {
+          "host": "${DBHost}",
+          "port": 5432,
+          "dbname": "${DBName}",
+          "username": "${DBUser}",
+          "password": "${DBPassword}"
+        }
+
+  # ---------------------------------------------------------------------
+  # SSM Parameters — per-table extraction checkpoints
+  # ---------------------------------------------------------------------
+  CheckpointLeadActivities:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /sales-analytics-pipeline/checkpoints/lead_activites_raw
+      Type: String
+      Value: "1970-01-01 00:00:00"
+      Description: Last successfully-extracted insert_date for lead_activites_raw
+
+  CheckpointCustomActivities:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /sales-analytics-pipeline/checkpoints/custom_activites_raw
+      Type: String
+      Value: "1970-01-01 00:00:00"
+      Description: Last successfully-extracted insert_date for custom_activites_raw
+
+  CheckpointCloseCrmUsers:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /sales-analytics-pipeline/checkpoints/close_crm_users_raw
+      Type: String
+      Value: "1970-01-01 00:00:00"
+      Description: Last successfully-extracted insert_date for close_crm_users_raw
+
+  # ---------------------------------------------------------------------
+  # Lambda execution role — least privilege, scoped to exactly what
+  # extract_handler.py needs
+  # ---------------------------------------------------------------------
+  ExtractionLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sales-analytics-pipeline-extraction-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ExtractionLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadDBSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref DBSecret
+              - Sid: WriteRawPrefixOnly
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub arn:aws:s3:::${S3BucketName}/raw/*
+              - Sid: ReadWriteCheckpoints
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/sales-analytics-pipeline/checkpoints/*
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+
+  # ---------------------------------------------------------------------
+  # Extraction Lambda
+  # ---------------------------------------------------------------------
+  ExtractionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: sales-analytics-pipeline-extraction
+      Runtime: python3.12
+      Handler: extract_handler.handler
+      Role: !GetAtt ExtractionLambdaRole.Arn
+      Timeout: 300
+      MemorySize: 256
+      # Code is deployed by the GitHub Actions workflow (see
+      # .github/workflows/deploy-aws.yml), which packages lambda/ and
+      # updates the function code after this stack creates the function
+      # shell. Placeholder inline code below only satisfies CloudFormation's
+      # requirement for initial Code content.
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              raise Exception("Placeholder - deploy real code via GitHub Actions")
+      Environment:
+        Variables:
+          DB_SECRET_ARN: !Ref DBSecret
+          S3_BUCKET: !Ref S3BucketName
+          SOURCE_SCHEMA: sales_raw
+          SSM_CHECKPOINT_PREFIX: /sales-analytics-pipeline/checkpoints
+
+  # ---------------------------------------------------------------------
+  # EventBridge Scheduler — daily trigger, ~08:00 EST (13:00 UTC)
+  # ---------------------------------------------------------------------
+  ExtractionScheduleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sales-analytics-pipeline-scheduler-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeExtractionLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt ExtractionLambda.Arn
+
+  ExtractionSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: sales-analytics-pipeline-daily-extraction
+      Description: Triggers Postgres extraction daily, after the 07:30 EST source refresh
+      ScheduleExpression: cron(0 13 * * ? *)  # 13:00 UTC = 08:00 EST
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      Target:
+        Arn: !GetAtt ExtractionLambda.Arn
+        RoleArn: !GetAtt ExtractionScheduleRole.Arn
+
+  # ---------------------------------------------------------------------
+  # Monitoring — CloudWatch Alarm + SNS on extraction failure
+  # (Solution Design Doc Section 6.1)
+  # ---------------------------------------------------------------------
+  ExtractionFailureTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: sales-analytics-pipeline-extraction-failures
+
+  ExtractionFailureSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref ExtractionFailureTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  ExtractionFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: sales-analytics-pipeline-extraction-failures
+      AlarmDescription: Fires when the extraction Lambda errors on any invocation
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ExtractionLambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref ExtractionFailureTopic
+
+  # ---------------------------------------------------------------------
+  # GitHub Actions deploy role — references the EXISTING OIDC provider,
+  # does not create a new one
+  # ---------------------------------------------------------------------
+  GitHubActionsDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sales-analytics-pipeline-github-deploy-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref ExistingGitHubOIDCProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                # Restrict to this specific repo — update <org>/<repo> before deploying
+                token.actions.githubusercontent.com:sub: repo:ronknighton/dea-sales-analytics:*
+      Policies:
+        - PolicyName: DeployExtractionLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:UpdateFunctionCode
+                  - lambda:GetFunction
+                Resource: !GetAtt ExtractionLambda.Arn
+              - Effect: Allow
+                Action: cloudformation:*
+                Resource: '*'
+                # Scope this down once the stack is stable; broad during
+                # initial iterative development.
+
+Outputs:
+  ExtractionLambdaArn:
+    Value: !GetAtt ExtractionLambda.Arn
+  DBSecretArn:
+    Value: !Ref DBSecret
+  GitHubDeployRoleArn:
+    Value: !GetAtt GitHubActionsDeployRole.Arn
