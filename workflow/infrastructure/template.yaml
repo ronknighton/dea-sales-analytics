@@ -138,7 +138,14 @@ Resources:
       Handler: extract_handler.handler
       Role: !GetAtt ExtractionLambdaRole.Arn
       Timeout: 900
-      MemorySize: 3008
+      MemorySize: 512
+      # Right-sized 2026-08-26 after observing real peak usage: 221MB on
+      # close_crm_users_raw (17,174 rows, largest table by volume during
+      # first-run backfill). 512MB gives ~2.3x headroom over the observed
+      # peak. Daily incremental runs going forward pull far fewer rows
+      # than this first-run backfill did, so this has margin to spare.
+      # If memory errors resurface (e.g. from row-size growth over time),
+      # increase and re-note the new observed peak here.
       # Code is deployed by the GitHub Actions workflow (see
       # .github/workflows/deploy-aws.yml), which packages lambda/ and
       # updates the function code after this stack creates the function
