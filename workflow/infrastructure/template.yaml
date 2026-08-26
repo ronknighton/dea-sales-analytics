@@ -137,8 +137,8 @@ Resources:
       Runtime: python3.12
       Handler: extract_handler.handler
       Role: !GetAtt ExtractionLambdaRole.Arn
-      Timeout: 300
-      MemorySize: 256
+      Timeout: 900
+      MemorySize: 1024
       # Code is deployed by the GitHub Actions workflow (see
       # .github/workflows/deploy-aws.yml), which packages lambda/ and
       # updates the function code after this stack creates the function
@@ -246,7 +246,7 @@ Resources:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
                 # Restrict to this specific repo — update <org>/<repo> before deploying
-                token.actions.githubusercontent.com:sub: repo:ronknighton@28845975/dea-sales-analytics@1345365015:*
+                token.actions.githubusercontent.com:sub: repo:<org>/<repo>:*
       Policies:
         - PolicyName: DeployExtractionLambda
           PolicyDocument:
@@ -255,8 +255,12 @@ Resources:
               - Effect: Allow
                 Action:
                   - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
                   - lambda:GetFunction
                 Resource: !GetAtt ExtractionLambda.Arn
+              - Effect: Allow
+                Action: iam:GetRole
+                Resource: !GetAtt ExtractionLambdaRole.Arn
               - Effect: Allow
                 Action: cloudformation:*
                 Resource: '*'
