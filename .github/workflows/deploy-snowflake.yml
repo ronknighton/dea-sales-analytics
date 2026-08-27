@@ -77,13 +77,13 @@ jobs:
       # Deploy order matters: schema before Tasks, since Tasks reference
       # objects (UDF, tables) that must already exist.
       - name: Deploy Bronze schema
-        run: snow sql -f bronze/001_bronze_schema.sql --connection-name default
+        run: snow sql -f bronze/001_bronze_schema.sql
 
       - name: Deploy Silver repair UDF
-        run: snow sql -f silver/001_repair_udf.sql --connection-name default
+        run: snow sql -f silver/001_repair_udf.sql
 
       - name: Deploy Silver schema
-        run: snow sql -f silver/002_silver_schema.sql --connection-name default
+        run: snow sql -f silver/002_silver_schema.sql
 
       - name: Deploy Tasks and monitoring
-        run: snow sql -f silver/003_tasks_and_monitoring.sql --connection-name default
+        run: snow sql -f silver/003_tasks_and_monitoring.sql
