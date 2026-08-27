@@ -1,0 +1,89 @@
+name: Deploy Snowflake Layer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workflow/snowflake/bronze/**'
+      - 'workflow/snowflake/silver/**'
+      - '.github/workflows/deploy-snowflake.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'workflow/snowflake/bronze/**'
+      - 'workflow/snowflake/silver/**'
+
+permissions:
+  id-token: write   # required for Snowflake OIDC/WIF — no static credentials used
+  contents: read
+
+env:
+  SNOWFLAKE_ACCOUNT: kttaypt-bt25293
+  SNOWFLAKE_USER: SVC_GITHUB_SALES_ANALYTICS
+  SNOWFLAKE_ROLE: SALES_ANALYTICS_DEPLOY_ROLE
+  SNOWFLAKE_WAREHOUSE: SALES_ANALYTICS_WH
+  SNOWFLAKE_DATABASE: SALES_ANALYTICS_PIPELINE
+
+jobs:
+  validate:
+    # PR-only: lightweight sanity checks that don't require Snowflake
+    # authentication. Deliberately does NOT attempt to connect to
+    # Snowflake here: pull_request-triggered workflows get a different
+    # OIDC subject claim (repo:OWNER@ID/REPO@ID:pull_request) than the
+    # push-to-main claim the service user's SUBJECT is scoped to
+    # (repo:OWNER@ID/REPO@ID:ref:refs/heads/main) — Snowflake WIF requires
+    # an exact match with no wildcard, so a connection attempt here would
+    # simply fail auth every time rather than validate anything.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workflow/snowflake
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Basic SQL syntax sanity check
+        run: |
+          for f in bronze/*.sql silver/*.sql; do
+            echo "Checking $f"
+            open_count=$(grep -o '(' "$f" | wc -l)
+            close_count=$(grep -o ')' "$f" | wc -l)
+            if [ "$open_count" -ne "$close_count" ]; then
+              echo "  FAILED: unbalanced parens in $f ($open_count open vs $close_count close)"
+              exit 1
+            fi
+            echo "  OK"
+          done
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workflow/snowflake
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Snowflake CLI with OIDC
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+          cli-version: '3.20.0'
+
+      # Deploy order matters: schema before Tasks, since Tasks reference
+      # objects (UDF, tables) that must already exist.
+      - name: Deploy Bronze schema
+        run: snow sql -f bronze/001_bronze_schema.sql --connection-name default
+
+      - name: Deploy Silver repair UDF
+        run: snow sql -f silver/001_repair_udf.sql --connection-name default
+
+      - name: Deploy Silver schema
+        run: snow sql -f silver/002_silver_schema.sql --connection-name default
+
+      - name: Deploy Tasks and monitoring
+        run: snow sql -f silver/003_tasks_and_monitoring.sql --connection-name default
