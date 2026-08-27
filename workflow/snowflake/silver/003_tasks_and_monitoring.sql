@@ -5,16 +5,28 @@
 -- Daily Task chain: Bronze COPY INTO -> row-count reconciliation ->
 -- Silver rebuild/MERGE, each with failure notifications.
 --
--- IMPORTANT: multi-statement logic lives in stored procedures (body
--- wrapped in $$...$$), not directly in Task bodies as BEGIN...END blocks.
--- snow sql -f splits files into separate statements on semicolons, and
--- a BEGIN...END block containing internal semicolons (e.g. multiple
--- COPY INTO statements) gets chopped at the first internal semicolon,
--- well before its own END; — confirmed by an actual failed deploy
--- (syntax error, unexpected EOF) before this file was restructured this
--- way. $$...$$ dollar-quoting protects the body's internal semicolons
--- from the splitter, the same protection silver/001_repair_udf.sql
--- already relies on for its Python UDF body.
+-- Two important corrections from earlier iterations, both confirmed via
+-- actual failed deploys, not assumptions:
+--
+-- 1. Multi-statement logic lives in stored procedures (body wrapped in
+--    $$...$$), not directly in Task bodies as BEGIN...END blocks —
+--    snow sql -f splits files into separate statements on semicolons,
+--    and a bare BEGIN...END block with internal semicolons gets chopped
+--    at the first one, well before its own END.
+--
+-- 2. Task's ERROR_INTEGRATION parameter only accepts QUEUE-type
+--    notification integrations (AWS SNS / GCP Pub/Sub / Azure Event
+--    Grid) — confirmed via Snowflake's own docs after a failed deploy
+--    ("Integration ... is not a valid notification integration for
+--    UserTasks"). EMAIL-type integrations (what SALES_ANALYTICS_TASK_
+--    FAILURE_NOTIFY is) are NOT supported there. Standing up a full SNS
+--    topic + IAM trust just for Task alerting would be a meaningful
+--    scope increase for what's really just "email on failure," so
+--    instead: each procedure below catches its own exceptions, sends an
+--    email via SYSTEM$SEND_EMAIL (the same EMAIL integration, used the
+--    way it's actually supported), then RAISE;s to re-throw — so
+--    TASK_HISTORY still correctly shows the run as FAILED, not just an
+--    email with no visible failure record.
 --
 -- Root task runs 30 minutes after the extraction Lambda's 08:00 EST
 -- schedule, as a buffer rather than an explicit completion signal.
@@ -56,6 +68,15 @@ BEGIN
     ON_ERROR = 'CONTINUE';
 
     RETURN 'Bronze load complete';
+EXCEPTION
+    WHEN OTHER THEN
+        CALL SYSTEM$SEND_EMAIL(
+            'SALES_ANALYTICS_TASK_FAILURE_NOTIFY',
+            'ronknighton@yahoo.com',
+            'Sales Analytics Pipeline: SP_BRONZE_LOAD failed',
+            'SQLCODE: ' || SQLCODE || ' SQLERRM: ' || SQLERRM
+        );
+        RAISE;
 END;
 $$;
 
@@ -94,8 +115,10 @@ BEGIN
     ))
     GROUP BY TABLE_NAME;
 
-    -- Alert if error rate exceeds 1% of rows loaded in this run.
-    -- Threshold is a starting point, not empirically validated yet.
+    -- Alert if error rate exceeds 1% of rows loaded in this run. This is
+    -- a data-quality threshold check, separate from the exception handler
+    -- below (which catches genuine procedure failures) — a run can
+    -- complete successfully and still trip this threshold.
     error_rate := (
         SELECT COALESCE(SUM(ERRORS_SEEN) / NULLIF(SUM(ROWS_LOADED), 0), 0)
         FROM BRONZE.BRONZE_LOAD_RECONCILIATION
@@ -112,6 +135,15 @@ BEGIN
     END IF;
 
     RETURN 'Reconciliation complete, error_rate=' || error_rate::string;
+EXCEPTION
+    WHEN OTHER THEN
+        CALL SYSTEM$SEND_EMAIL(
+            'SALES_ANALYTICS_TASK_FAILURE_NOTIFY',
+            'ronknighton@yahoo.com',
+            'Sales Analytics Pipeline: SP_BRONZE_RECONCILE failed',
+            'SQLCODE: ' || SQLCODE || ' SQLERRM: ' || SQLERRM
+        );
+        RAISE;
 END;
 $$;
 
@@ -217,32 +249,38 @@ BEGIN
         VALUES (src.lead_id, src.activity_id, src.full_record, src.activity_at, src.md5_hash, src.insert_date, CURRENT_TIMESTAMP());
 
     RETURN 'Silver processing complete';
+EXCEPTION
+    WHEN OTHER THEN
+        CALL SYSTEM$SEND_EMAIL(
+            'SALES_ANALYTICS_TASK_FAILURE_NOTIFY',
+            'ronknighton@yahoo.com',
+            'Sales Analytics Pipeline: SP_SILVER_PROCESS failed',
+            'SQLCODE: ' || SQLCODE || ' SQLERRM: ' || SQLERRM
+        );
+        RAISE;
 END;
 $$;
 
 -- ----------------------------------------------------------------------------
--- Tasks — each body is now a single CALL statement, immune to the
--- semicolon-splitting problem entirely since there's nothing internal
--- left to split.
+-- Tasks — no ERROR_INTEGRATION (EMAIL type isn't valid there; see header
+-- note). Each body is a single CALL, whose own exception handler covers
+-- failure notification.
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE TASK BRONZE_LOAD_TASK
     WAREHOUSE = SALES_ANALYTICS_WH
     SCHEDULE = 'USING CRON 30 13 * * * UTC'  -- 13:30 UTC = 08:30 EST
-    ERROR_INTEGRATION = SALES_ANALYTICS_TASK_FAILURE_NOTIFY
 AS
 CALL SP_BRONZE_LOAD();
 
 CREATE OR REPLACE TASK BRONZE_RECONCILIATION_TASK
     WAREHOUSE = SALES_ANALYTICS_WH
     AFTER BRONZE_LOAD_TASK
-    ERROR_INTEGRATION = SALES_ANALYTICS_TASK_FAILURE_NOTIFY
 AS
 CALL SP_BRONZE_RECONCILE();
 
 CREATE OR REPLACE TASK SILVER_PROCESS_TASK
     WAREHOUSE = SALES_ANALYTICS_WH
     AFTER BRONZE_RECONCILIATION_TASK
-    ERROR_INTEGRATION = SALES_ANALYTICS_TASK_FAILURE_NOTIFY
 AS
 CALL SP_SILVER_PROCESS();
 
