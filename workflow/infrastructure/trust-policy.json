@@ -1,0 +1,17 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::343147895887:user/2lvu1000-s"
+            },
+            "Action": "sts:AssumeRole",
+            "Condition": {
+                "StringEquals": {
+                    "sts:ExternalId": "WH27553_SFCRole=5_KHmPqeTkiTs6ZMh57CN7+D5ygWg="
+                }
+            }
+        }
+    ]
+}
