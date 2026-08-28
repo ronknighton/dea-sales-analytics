@@ -1,0 +1,6 @@
+name: sales_analytics_dashboard
+channels:
+  - snowflake
+dependencies:
+  - pandas
+  - streamlit
