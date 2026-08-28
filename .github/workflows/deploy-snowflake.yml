@@ -6,12 +6,14 @@ on:
     paths:
       - 'workflow/snowflake/bronze/**'
       - 'workflow/snowflake/silver/**'
+      - 'workflow/snowflake/gold/**'
       - '.github/workflows/deploy-snowflake.yml'
   pull_request:
     branches: [main]
     paths:
       - 'workflow/snowflake/bronze/**'
       - 'workflow/snowflake/silver/**'
+      - 'workflow/snowflake/gold/**'
 
 permissions:
   id-token: write   # required for Snowflake OIDC/WIF — no static credentials used
@@ -44,18 +46,61 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Basic SQL syntax sanity check
+      - name: Install sqlparse
+        run: pip install sqlparse --break-system-packages -q
+
+      - name: Write SQL syntax checker
         run: |
-          for f in bronze/*.sql silver/*.sql; do
-            echo "Checking $f"
-            open_count=$(grep -o '(' "$f" | wc -l)
-            close_count=$(grep -o ')' "$f" | wc -l)
-            if [ "$open_count" -ne "$close_count" ]; then
-              echo "  FAILED: unbalanced parens in $f ($open_count open vs $close_count close)"
-              exit 1
-            fi
-            echo "  OK"
-          done
+          cat > check_sql.py << 'PYEOF'
+          import sys
+          import sqlparse
+
+          def check(path):
+              with open(path) as f:
+                  content = f.read()
+              try:
+                  statements = sqlparse.parse(content)
+              except Exception as e:
+                  print(f"  FAILED: sqlparse could not parse file: {e}")
+                  return False
+              if not statements:
+                  print("  FAILED: no statements found")
+                  return False
+              # sqlparse correctly tokenizes string literals (including ''
+              # escapes) and comments, avoiding false positives a hand-rolled
+              # quote-tracker hits on legitimate SQL (activity names like
+              # '5) Strategy Call' containing parens, comment apostrophes
+              # like "doc's", or escaped '' apostrophes inside string bodies).
+              depth = 0
+              ok = True
+              for stmt in statements:
+                  for token in stmt.flatten():
+                      if token.ttype is sqlparse.tokens.Punctuation:
+                          if token.value == '(':
+                              depth += 1
+                          elif token.value == ')':
+                              depth -= 1
+                              if depth < 0:
+                                  print(f"  FAILED: unmatched closing paren near '{token}'")
+                                  ok = False
+                                  depth = 0
+              if depth != 0:
+                  print(f"  FAILED: {depth} unclosed paren(s) at end of file")
+                  ok = False
+              if ok:
+                  print("  OK")
+              return ok
+
+          all_ok = True
+          for path in sys.argv[1:]:
+              print(f"Checking {path}")
+              if not check(path):
+                  all_ok = False
+          sys.exit(0 if all_ok else 1)
+          PYEOF
+
+      - name: Basic SQL syntax sanity check
+        run: python3 check_sql.py bronze/*.sql silver/*.sql gold/*.sql
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -87,3 +132,9 @@ jobs:
 
       - name: Deploy Tasks and monitoring
         run: snow sql -f silver/003_tasks_and_monitoring.sql --temporary-connection
+
+      - name: Deploy Gold dimension and fact
+        run: snow sql -f gold/001_gold_dimension_fact.sql --temporary-connection
+
+      - name: Deploy Gold KPI views
+        run: snow sql -f gold/002_kpi_views.sql --temporary-connection
