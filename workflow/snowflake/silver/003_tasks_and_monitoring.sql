@@ -74,7 +74,7 @@ EXCEPTION
             'SALES_ANALYTICS_TASK_FAILURE_NOTIFY',
             'ronknighton@yahoo.com',
             'Sales Analytics Pipeline: SP_BRONZE_LOAD failed',
-            'SQLCODE: ' || SQLCODE || ' SQLERRM: ' || SQLERRM
+            'See TASK_HISTORY / QUERY_HISTORY for details on this failure.'
         );
         RAISE;
 END;
@@ -141,7 +141,7 @@ EXCEPTION
             'SALES_ANALYTICS_TASK_FAILURE_NOTIFY',
             'ronknighton@yahoo.com',
             'Sales Analytics Pipeline: SP_BRONZE_RECONCILE failed',
-            'SQLCODE: ' || SQLCODE || ' SQLERRM: ' || SQLERRM
+            'See TASK_HISTORY / QUERY_HISTORY for details on this failure.'
         );
         RAISE;
 END;
@@ -255,7 +255,7 @@ EXCEPTION
             'SALES_ANALYTICS_TASK_FAILURE_NOTIFY',
             'ronknighton@yahoo.com',
             'Sales Analytics Pipeline: SP_SILVER_PROCESS failed',
-            'SQLCODE: ' || SQLCODE || ' SQLERRM: ' || SQLERRM
+            'See TASK_HISTORY / QUERY_HISTORY for details on this failure.'
         );
         RAISE;
 END;
