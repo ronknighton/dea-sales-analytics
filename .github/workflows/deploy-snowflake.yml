@@ -7,6 +7,7 @@ on:
       - 'workflow/snowflake/bronze/**'
       - 'workflow/snowflake/silver/**'
       - 'workflow/snowflake/gold/**'
+      - 'workflow/streamlit/**'
       - '.github/workflows/deploy-snowflake.yml'
   pull_request:
     branches: [main]
@@ -14,6 +15,7 @@ on:
       - 'workflow/snowflake/bronze/**'
       - 'workflow/snowflake/silver/**'
       - 'workflow/snowflake/gold/**'
+      - 'workflow/streamlit/**'
 
 permissions:
   id-token: write   # required for Snowflake OIDC/WIF — no static credentials used
@@ -138,3 +140,12 @@ jobs:
 
       - name: Deploy Gold KPI views
         run: snow sql -f gold/002_kpi_views.sql --temporary-connection
+
+      - name: Deploy Gold report views
+        run: snow sql -f gold/003_report_views.sql --temporary-connection
+
+      - name: Deploy Streamlit dashboard
+        working-directory: workflow/streamlit
+        run: >
+          snow streamlit deploy --replace --temporary-connection
+          --database SALES_ANALYTICS_PIPELINE --schema GOLD
