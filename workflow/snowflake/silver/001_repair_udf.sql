@@ -15,10 +15,12 @@ RETURNS STRING
 LANGUAGE PYTHON
 RUNTIME_VERSION = 3.11
 HANDLER = 'repair'
-COMMENT = 'Repairs single-quote-instead-of-double-quote JSON malformation where the delimiter collides with literal apostrophes in free text (e.g. "Prospect''s Name"). Heuristic: inside a string, a single quote closes the string only if, after skipping whitespace, the next character is one of , } ] : or end-of-string — otherwise treated as a literal apostrophe. Known limitation: prose fields using single quotes as scare-quotes around other words are genuinely ambiguous and may parse with shifted boundaries; this does not affect short structured values (outcome codes, names, ids).'
+COMMENT = 'Repairs single-quote-instead-of-double-quote JSON malformation where the delimiter collides with literal apostrophes in free text (e.g. "Prospect''s Name"). Heuristic: inside a string, a single quote closes the string only if, after skipping whitespace, the next character is one of , } ] : or end-of-string — otherwise treated as a literal apostrophe. Known limitation: prose fields using single quotes as scare-quotes around other words are genuinely ambiguous and may parse with shifted boundaries; this does not affect short structured values (outcome codes, names, ids). Confirmed via a real deploy failure: some rows have a NULL PAYLOAD:JSON_OBJECT value (structural inconsistency in source data, not universal per row) — function returns NULL on NULL input rather than crashing, since a Python exception inside a UDF aborts the entire calling statement rather than just that row, defeating the quarantine design in SP_SILVER_PROCESS.'
 AS
 $$
 def repair(raw_text):
+    if raw_text is None:
+        return None
     result = []
     in_string = False
     i, n = 0, len(raw_text)
