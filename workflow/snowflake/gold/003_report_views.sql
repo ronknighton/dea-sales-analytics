@@ -110,7 +110,7 @@ GROUP BY DIAL_DATE, SETTER;
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE VIEW CLOSER_REPORT AS
 SELECT
-    CLOSER_NAME,
+    asd.CLOSER_NAME,
     DATE_TRUNC('month', DATE_OF_STRATEGY_CALL)::date AS CALL_YEAR_MONTH,
     COUNT(*) AS CALL_BOOKED,
     COUNT(CASE WHEN STRATEGY_CALL_OUTCOME = '2. Admin Cancel' THEN 1 END) AS ADMIN_CANCEL,
@@ -125,7 +125,7 @@ SELECT
     SUM(TRY_CAST(sd.CASH_COLLECTED AS FLOAT)) AS CASH_COLLECTED
 FROM ALL_STRATEGIES_DETAILS asd
 LEFT JOIN SALES_DETAILS sd ON sd.LEAD_ID = asd.LEAD_ID
-GROUP BY CLOSER_NAME, CALL_YEAR_MONTH;
+GROUP BY asd.CLOSER_NAME, CALL_YEAR_MONTH;
 
 -- ----------------------------------------------------------------------------
 -- OBJECTIONS_FACED_REPORT — Requirements Doc Section 6.4
