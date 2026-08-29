@@ -144,11 +144,21 @@ def extract_table(conn, table: str) -> dict:
         print(f"  {table}: fetched DB page at offset {offset}, {len(rows)} rows", flush=True)
 
         for raw_data, insert_date in rows:
-            line = json.dumps(raw_data)
+            insert_date_str = insert_date.isoformat(sep=" ")
+            # Wrap as {payload, insert_date} — Bronze's COPY INTO has always
+            # expected this exact shape ($1:payload, $1:insert_date). Prior
+            # to this fix, raw_data was written directly with no wrapper,
+            # so $1:payload silently resolved to NULL for every row in
+            # every table (COPY INTO doesn't reject NULL results, so row
+            # counts looked normal while content was empty) — confirmed via
+            # PARSE_FAILURES landing exactly 33+18315=18348 rows (100% of
+            # the two malformed-string tables) and LEAD_ACTIVITIES_PROCESSED
+            # sitting at 0 rows despite 3157 real Bronze rows.
+            wrapped = {"payload": raw_data, "insert_date": insert_date_str}
+            line = json.dumps(wrapped)
             current_batch_lines.append(line)
             current_batch_bytes += len(line.encode("utf-8"))
 
-            insert_date_str = insert_date.isoformat(sep=" ")
             if insert_date_str > latest_insert_date:
                 latest_insert_date = insert_date_str
 
