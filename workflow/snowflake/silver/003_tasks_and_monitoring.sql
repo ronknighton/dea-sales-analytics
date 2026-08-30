@@ -233,6 +233,22 @@ BEGIN
         VALUES (src.user_id, src.email, src.first_name, src.last_name, src.role, src.status, src.md5_hash, src.insert_date, CURRENT_TIMESTAMP());
 
     -- lead_activites_raw: already valid jsonb, flatten directly, then MERGE
+    --
+    -- CRITICAL FIX (2026-08-30): the source SELECT below previously
+    -- extracted activity_record:activity_id, but real activity records
+    -- have no such key — the actual field is just "id" (confirmed via
+    -- direct inspection of real production records). This meant
+    -- activity_id was NULL for every single row, and since MERGE's match
+    -- condition is "tgt.lead_id = src.lead_id AND tgt.activity_id =
+    -- src.activity_id", and NULL never equals NULL in SQL, this MERGE
+    -- had never matched a single row since this pipeline first went
+    -- live — every daily Postgres snapshot re-inserted the same
+    -- recurring activities as brand-new rows instead of updating
+    -- existing ones, silently defeating the exact "same activity
+    -- reappears across multiple days, must deduplicate" requirement
+    -- Section 4.1 of the requirements doc calls for. LEAD_ACTIVITIES_
+    -- PROCESSED's row count had been growing unbounded with true
+    -- duplicates rather than staying at the real unique-activity count.
     CREATE OR REPLACE TABLE LEAD_ACTIVITIES_PROCESSED_TRANSIENT AS
     SELECT f.value AS activity_record, BRONZE.INSERT_DATE AS insert_date
     FROM BRONZE.LEAD_ACTIVITIES_RAW BRONZE,
@@ -241,14 +257,14 @@ BEGIN
     MERGE INTO LEAD_ACTIVITIES_PROCESSED AS tgt
     USING (
         SELECT
-            activity_record:activity_id::string AS activity_id,
+            activity_record:id::string AS activity_id,
             activity_record:lead_id::string AS lead_id,
             activity_record AS full_record,
             activity_record:activity_at::timestamp_ntz AS activity_at,
             MD5(activity_record::string) AS md5_hash, insert_date
         FROM LEAD_ACTIVITIES_PROCESSED_TRANSIENT
         QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY activity_record:lead_id, activity_record:activity_id
+            PARTITION BY activity_record:lead_id, activity_record:id
             ORDER BY activity_record:activity_at::timestamp_ntz DESC
         ) = 1
     ) AS src
