@@ -20,6 +20,19 @@
 -- Item / Next Step from Solution Design Doc Section 10). Treat these as
 -- a solid first pass to validate against real numbers once that
 -- snapshot is available, not as SME-confirmed final logic.
+--
+-- IS_INTERNAL FILTER TEMPORARILY REMOVED (2026-08-30): direct data
+-- investigation found every single Setter/Closer in the current dataset
+-- resolves to a dataengineeracademy.com account — filtering WHERE NOT
+-- IS_INTERNAL zeroed out every report entirely, with no non-internal
+-- activity to show. This looks like a training/cohort-simulation dataset
+-- rather than one with a real external sales team, but that's an
+-- inference, not confirmed. The IS_INTERNAL flag itself remains intact
+-- on DIM_USERS (see 001_gold_dimension_fact.sql) — only the downstream
+-- filter was removed here, so it can be reinstated in any specific view
+-- once the SME clarifies whether DEA staff activity is meant to BE the
+-- simulated sales team for this dataset, or should be excluded the way
+-- Open Item #5 originally assumed.
 
 USE DATABASE SALES_ANALYTICS_PIPELINE;
 USE SCHEMA GOLD;
@@ -69,7 +82,7 @@ SELECT
     (t.TRIAGE_CALL_OUTCOME = '1. Strategy Call Scheduled') AS STRATEGY_CALL_BOOKED,
     DATE_TRUNC('week', t.ACTIVITY_AT)::date AS SC_YEAR_WEEK
 FROM triage t
-LEFT JOIN DIM_USERS u ON u.USER_ID = t.SETTER_USER_ID AND NOT u.IS_INTERNAL;
+LEFT JOIN DIM_USERS u ON u.USER_ID = t.SETTER_USER_ID;
 
 -- ----------------------------------------------------------------------------
 -- OUTBOUND_STRATEGIES_BOOKED — Requirements Doc Section 3.1.2
@@ -94,7 +107,7 @@ SELECT
     (p.PROSPECTING_CALL_OUTCOME = '2. Strategy Call Scheduled') AS STRATEGY_CALL_BOOKED,
     DATE_TRUNC('week', p.ACTIVITY_AT)::date AS SC_YEAR_WEEK
 FROM prospecting p
-LEFT JOIN DIM_USERS u ON u.USER_ID = p.SETTER_USER_ID AND NOT u.IS_INTERNAL;
+LEFT JOIN DIM_USERS u ON u.USER_ID = p.SETTER_USER_ID;
 
 -- ----------------------------------------------------------------------------
 -- ALL_STRATEGIES_DETAILS — every Strategy Call, attendance per Section
@@ -120,8 +133,8 @@ SELECT
     setter.EMAIL AS SETTER,
     setter.FULL_NAME AS SETTER_NAME
 FROM STRATEGY_CALL_ACTIVITIES sc
-LEFT JOIN DIM_USERS setter ON setter.USER_ID = sc.SETTER_USER_ID AND NOT setter.IS_INTERNAL
-LEFT JOIN DIM_USERS closer ON closer.USER_ID = sc.CLOSER_USER_ID AND NOT closer.IS_INTERNAL;
+LEFT JOIN DIM_USERS setter ON setter.USER_ID = sc.SETTER_USER_ID
+LEFT JOIN DIM_USERS closer ON closer.USER_ID = sc.CLOSER_USER_ID;
 
 -- ----------------------------------------------------------------------------
 -- SALES_DETAILS — Requirements Doc Section 3.4. Sourced from New Sale
@@ -157,8 +170,8 @@ SELECT
     s.PROGRAM,
     s.CASH_COLLECTED
 FROM sales s
-LEFT JOIN DIM_USERS setter ON setter.USER_ID = s.SETTER_USER_ID AND NOT setter.IS_INTERNAL
-LEFT JOIN DIM_USERS closer ON closer.USER_ID = s.CLOSER_USER_ID AND NOT closer.IS_INTERNAL;
+LEFT JOIN DIM_USERS setter ON setter.USER_ID = s.SETTER_USER_ID
+LEFT JOIN DIM_USERS closer ON closer.USER_ID = s.CLOSER_USER_ID;
 
 -- ----------------------------------------------------------------------------
 -- OUTBOUND_PROSPECT_DIALS — Requirements Doc Section 6.2, top-of-funnel
@@ -185,4 +198,4 @@ SELECT
     u.EMAIL AS SETTER_CLOSER_EMAIL,
     u.FULL_NAME AS SETTER_CLOSER_NAME
 FROM prospecting p
-LEFT JOIN DIM_USERS u ON u.USER_ID = p.SETTER_USER_ID AND NOT u.IS_INTERNAL;
+LEFT JOIN DIM_USERS u ON u.USER_ID = p.SETTER_USER_ID;
