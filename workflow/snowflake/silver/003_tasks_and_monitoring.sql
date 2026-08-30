@@ -172,7 +172,15 @@ BEGIN
     WHERE TRY_PARSE_JSON(REPAIR_JSON_QUOTES(BRONZE.PAYLOAD:JSON_OBJECT::string)) IS NULL;
 
     -- NEW dimension (not in original Snowflake PDF): cf_XXXX -> field_name
-    -- -> owning activity type.
+    -- -> owning activity type. Deduplicated on (field_id, activity_type_id)
+    -- pair, keeping the most recent daily snapshot — NOT deduplicated on
+    -- field_id alone, since some fields are legitimately shared across
+    -- multiple activity types (e.g. "Closer" appears on both "5) Strategy
+    -- Call" and "6) Strategy Call Follow Up" with the same field_id) and
+    -- collapsing to one row per field_id would silently erase that.
+    -- Confirmed as a real bug via production data: without this dedup,
+    -- the same catalog was repeating across ~32 daily snapshots
+    -- (7025 rows for only 134 distinct field_ids).
     CREATE OR REPLACE TABLE CUSTOM_ACTIVITY_FIELDS AS
     SELECT
         act.value:id::string AS custom_activity_type_id,
@@ -181,9 +189,13 @@ BEGIN
         fld.value:id::string AS field_id,
         fld.value:name::string AS field_name,
         fld.value:type::string AS field_type
-    FROM CUSTOM_ACTIVITIES_TRANSIENT,
-         LATERAL FLATTEN(input => parsed:data) act,
-         LATERAL FLATTEN(input => act.value:fields) fld;
+    FROM CUSTOM_ACTIVITIES_TRANSIENT cat,
+         LATERAL FLATTEN(input => cat.parsed:data) act,
+         LATERAL FLATTEN(input => act.value:fields) fld
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY fld.value:id::string, act.value:id::string
+        ORDER BY cat.insert_date DESC
+    ) = 1;
 
     -- close_crm_users_raw: repair -> PARSE_JSON -> FLATTEN -> MERGE
     CREATE OR REPLACE TABLE CLOSE_CRM_USERS_TRANSIENT AS
