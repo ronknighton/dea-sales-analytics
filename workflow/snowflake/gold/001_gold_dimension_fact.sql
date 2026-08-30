@@ -37,12 +37,25 @@ FROM SILVER.CLOSE_CRM_USERS_PROCESSED;
 -- FACT_LEAD_FUNNEL — resolves every custom.cf_XXXX key on a lead
 -- activity against the CUSTOM_ACTIVITY_FIELDS dictionary (Silver),
 -- producing one row per (activity, field) with the field's real name
--- and owning activity type attached. This is the mechanism that
--- resolved the outcome-value duplication found during requirements
--- analysis: '3. No Show' and '4. No Show' aren't duplicates, they're
--- values from two different fields (Follow Up Call Outcome vs. Strategy
--- Call Outcome) that happen to share label text — this view keeps that
--- distinction visible instead of flattening it away.
+-- and owning activity type attached.
+--
+-- CORRECTED after a real production bug: custom.cf_XXXX are FLAT
+-- top-level keys on FULL_RECORD, with a literal period in the key name
+-- (e.g. "custom.cf_3JFRKeLpnUvmsOsVG478u5iAQZ5i5dPmvKbIkYLUaaH") — NOT
+-- nested under a "custom" object as originally assumed. The original
+-- version (OBJECT_KEYS(lap.FULL_RECORD:custom)) always evaluated to
+-- NULL, since no record anywhere has a nested "custom" key, making this
+-- view empty for every deploy regardless of how much real data existed
+-- upstream. This matches the requirements doc's own Phase 3 language
+-- ("extracting keys containing %custom.%" — a LIKE-style wildcard,
+-- describing a flat prefix, not a nested path) which was correct all
+-- along and simply not followed in the original implementation.
+--
+-- Also now filters to _type = 'CustomActivity' — confirmed necessary,
+-- not just assumed, after finding SMS/Call/Email/Note/Meeting/Created/
+-- LeadMerge records (91% of LEAD_ACTIVITIES_PROCESSED in production
+-- data) have no custom.* keys at all and would otherwise contribute
+-- nothing but wasted FLATTEN work.
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE VIEW FACT_LEAD_FUNNEL AS
 SELECT
@@ -51,9 +64,10 @@ SELECT
     lap.ACTIVITY_AT,
     caf.CUSTOM_ACTIVITY_TYPE_NAME,
     caf.FIELD_NAME,
-    lap.FULL_RECORD:custom[caf.FIELD_ID]::string AS OUTCOME_VALUE,
+    lap.FULL_RECORD[k.value::string]::string AS OUTCOME_VALUE,
     lap.FULL_RECORD:user_id::string AS RECORD_USER_ID
 FROM SILVER.LEAD_ACTIVITIES_PROCESSED lap,
-     LATERAL FLATTEN(input => OBJECT_KEYS(lap.FULL_RECORD:custom)) k
+     LATERAL FLATTEN(input => OBJECT_KEYS(lap.FULL_RECORD)) k
 JOIN SILVER.CUSTOM_ACTIVITY_FIELDS caf
-    ON caf.FIELD_ID = k.value::string;
+    ON k.value::string = 'custom.' || caf.FIELD_ID
+WHERE lap.FULL_RECORD:_type::string = 'CustomActivity';
