@@ -114,14 +114,24 @@ This order matters for two different reasons depending on the step:
   procedure does not run it" below, the most important lesson from this
   layer's first real deploy.
 
-## What this does NOT include yet
+## Status
 
-- Export layer (COPY INTO flat files) — Solution Design Doc Section 4.5.
-- Reporting layer (Streamlit / Tableau) — Section 5, tool selection decided,
-  not yet implemented.
-- The 7-consecutive-day production simulation run required by the
-  requirements doc, Section 5 — not started; should follow validation
-  against Avirup's reference report snapshot.
+- **Export layer — RESOLVED, not required.** SME confirmed directly: "if
+  within snowflake then I think you can use the tables and query
+  directly." Streamlit reads Gold views natively, so the COPY INTO flat-file
+  unloads (Solution Design Doc Section 4.5) were built but are not part of
+  the active pipeline. SQL remains in `snowflake/gold/` if a future
+  external tool ever needs it.
+- **Reporting layer — LIVE.** Streamlit in Snowflake (`SALES_ANALYTICS_DASHBOARD`)
+  deployed via `snow streamlit deploy`, all four reports rendering against
+  real Gold-layer data.
+- **7-consecutive-day production simulation — CONFIRMED COMPLETE.**
+  Verified via `INFORMATION_SCHEMA.TASK_HISTORY` (not inferred from elapsed
+  time): all three pipeline Tasks show `SUCCEEDED` across 7 consecutive
+  calendar days, correct dependency order each day, no failures or gaps.
+- **Still open:** business-logic validation against the SME's reference
+  report snapshot — pending a response to a specific date/month request
+  (see Solution Design Doc Section 13, Next Steps).
 
 ## Lessons from the first deploy
 
@@ -214,3 +224,89 @@ a `sqlparse`-based checker instead of continuing to patch a hand-rolled
 quote-tracking state machine. If a future PR's `validate` step fails on a
 paren-balance check that looks obviously wrong, check whether the checker
 itself needs adjusting before assuming the SQL is broken.
+
+## Lessons from production validation
+
+The six issues above were about getting a deploy to succeed at all. Once
+real, full-volume data started flowing through the successfully-deployed
+pipeline, a second, more serious category of bug surfaced: the pipeline
+ran without error while silently producing wrong or empty results. Each
+of these was caught by checking row counts and displayed numbers against
+expectations, not by any error message — worth internalizing as a
+pattern, not just fixing individually.
+
+**7. Bronze's `COPY INTO` expected a `{payload, insert_date}` wrapper the
+Lambda never actually produced.** `extract_handler.py` wrote each row's
+`raw_data` content directly to S3 with no wrapper; Bronze's `COPY INTO`
+statements did `SELECT $1:payload, $1:insert_date::timestamp_ntz`. Since
+no staged file had a top-level `payload` key, this resolved to `NULL` for
+*every row in every table* — and `COPY INTO` does not reject `NULL`
+results, so row counts looked completely normal while content was empty.
+Confirmed via `PARSE_FAILURES` landing at exactly 100% of two tables'
+row counts, and `LEAD_ACTIVITIES_PROCESSED` sitting at 0 despite
+thousands of real Bronze rows. Fixed on the Lambda side (wrapping output
+to match the contract Bronze had always expected), not the Bronze side —
+Bronze's design was correct, the Lambda just never fulfilled it.
+
+**8. `FORCE = TRUE` reloads every file matching the stage path, not just
+"already-loaded" ones — including stale pre-fix files.** Remediating #7
+required force-reloading the newly-corrected files, which silently
+resurrected older, pre-fix files still sitting in earlier S3 date
+partitions, roughly doubling row counts and reintroducing the exact
+`NULL`-payload problem. Fix: delete stale S3 partitions *before*
+truncate + force-reload, not after.
+
+**9. A table with no dedup logic will eventually break, even if it works
+fine at first.** `CUSTOM_ACTIVITY_FIELDS` rebuilt from the full catalog on
+every run with no deduplication — fine when there was only one snapshot's
+worth of data, silently broken (52x row inflation: 7,025 rows for 134
+distinct fields) once real daily volume accumulated. Fixed by
+deduplicating on the `(field_id, activity_type_id)` **pair**, not
+`field_id` alone — some fields are legitimately shared across multiple
+activity types (e.g. "Closer" on both Strategy Call and its Follow Up),
+and collapsing to one row per `field_id` would have silently erased that.
+
+**10. The single most consequential bug in this project: a foundational
+key-structure assumption was wrong from the original design, and nothing
+caught it until real volume existed.** `FACT_LEAD_FUNNEL` assumed
+`custom.cf_XXXX` fields lived nested under a `custom` object key. Direct
+inspection of real activity records showed these are **flat top-level
+keys with a literal period in the key name** (e.g.
+`"custom.cf_3JFRKeLp..."`) — there is no nested object anywhere in the
+data. The original requirements doc had this right all along ("extracting
+keys containing `%custom.%`" — a `LIKE`-style wildcard describing a flat
+prefix, not a nested path); the implementation just didn't follow it.
+This meant the view returned zero rows since its original design,
+regardless of how much valid data existed upstream — confirmed via
+`OBJECT_KEYS(NULL)` silently producing zero `LATERAL FLATTEN` rows rather
+than an error. Also newly enforced while fixing this: filtering to
+`_type = 'CustomActivity'` only, confirmed necessary after finding the
+other six activity types (SMS, Call, Email, Note, Meeting, Created,
+LeadMerge — 91% of all lead activities) carry no `custom.*` keys at all.
+
+**11. `NULL = NULL` is never `TRUE` in SQL — and a `MERGE` match
+condition built on a wrong key name fails this way silently, forever.**
+`LEAD_ACTIVITIES_PROCESSED`'s `MERGE` extracted
+`activity_record:activity_id`, but real records have no such key — the
+actual field is just `"id"`. Since the match condition was
+`tgt.activity_id = src.activity_id`, and both sides were always `NULL`,
+this `MERGE` had never matched a single row since the pipeline first went
+live. Every daily Postgres snapshot re-inserted the same recurring
+activities as brand-new rows instead of updating existing ones — the
+exact "same activity reappears across multiple days" problem the
+requirements doc's Section 4.1 dedup requirement exists to solve, quietly
+defeated by one wrong field name. After truncating and rebuilding with the
+correct `activity_record:id`, total row count and distinct `activity_id`
+count landed on the identical figure (70,918) — the confirmation that
+dedup was finally working.
+
+**12. A dashboard can display a wrong number even when the underlying
+data and SQL are both correct.** Streamlit's summary metrics computed
+`df['SHOW_RATE'].mean()` — an unweighted average of already-computed
+daily percentages. This distorts toward small-volume days: a single-lead
+100%-show day counts the same as a fifty-lead day at 80%. Confirmed
+directly: this showed a 98.7% show rate against a correctly pooled rate
+of 87.8% on identical data. Fixed by computing pooled rates from summed
+numerators and denominators (`SUM(taken) / SUM(booked)`) rather than
+averaging pre-computed percentages — applied to every rate-based metric
+and trend chart in the app, not just the one caught first.
