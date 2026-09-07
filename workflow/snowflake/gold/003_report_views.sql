@@ -35,7 +35,8 @@ WITH triage_base AS (
 strategy_joined AS (
     SELECT
         t.LEAD_ID, t.TRIAGE_DATE, t.SETTER, t.STRATEGY_CALL_BOOKED,
-        s.STATUS AS STRATEGY_STATUS
+        s.STATUS AS STRATEGY_STATUS,
+        s.OFFER_PRESENTED
     FROM triage_base t
     LEFT JOIN ALL_STRATEGIES_DETAILS s ON s.LEAD_ID = t.LEAD_ID
 ),
@@ -57,6 +58,14 @@ SELECT
         / NULLIF(COUNT(DISTINCT LEAD_ID), 0) * 100, 1) AS TRIAGE_SET_RATE,
     COUNT(DISTINCT CASE WHEN STRATEGY_CALL_BOOKED THEN LEAD_ID END) AS STRATEGY_CALL_BOOKED,
     COUNT(DISTINCT CASE WHEN STRATEGY_STATUS = 'ATTENDED' THEN LEAD_ID END) AS STRATEGY_CALL_TAKEN,
+    -- Previously omitted despite being explicitly documented in both
+    -- Section 6.1's narrative ("Offer Rate") and the Snowflake PDF's
+    -- Export Layer column list for this exact report — a real build
+    -- gap, not a documentation gap, caught during report comparison.
+    -- Denominator matches the same pattern already used for SALE_RATE:
+    -- rate relative to strategy calls actually attended.
+    ROUND(COUNT(DISTINCT CASE WHEN OFFER_PRESENTED = 'Yes' THEN LEAD_ID END)
+        / NULLIF(COUNT(DISTINCT CASE WHEN STRATEGY_STATUS = 'ATTENDED' THEN LEAD_ID END), 0) * 100, 1) AS OFFER_RATE,
     COUNT(DISTINCT CASE WHEN CONTRACTED_VALUE IS NOT NULL THEN LEAD_ID END) AS TOTAL_SALES,
     ROUND(COUNT(DISTINCT CASE WHEN CONTRACTED_VALUE IS NOT NULL THEN LEAD_ID END)
         / NULLIF(COUNT(DISTINCT CASE WHEN STRATEGY_STATUS = 'ATTENDED' THEN LEAD_ID END), 0) * 100, 1) AS SALE_RATE,
