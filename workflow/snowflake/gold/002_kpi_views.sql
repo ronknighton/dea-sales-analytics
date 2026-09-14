@@ -180,7 +180,19 @@ LEFT JOIN DIM_USERS closer ON closer.USER_ID = s.CLOSER_USER_ID
 -- LEAD_ID was fanning out on these — one real strategy call was
 -- duplicating once per blank stub. A real sale event should carry at
 -- least one of these three fields; anything with none of them isn't one.
-WHERE NOT (s.SALE_STATUS IS NULL AND s.CONTRACTED_VALUE IS NULL AND s.CASH_COLLECTED IS NULL);
+WHERE NOT (s.SALE_STATUS IS NULL AND s.CONTRACTED_VALUE IS NULL AND s.CASH_COLLECTED IS NULL)
+-- SECOND FIX, found after the blank-stub filter above: even with stubs
+-- removed, some leads genuinely have multiple real sale-related records
+-- over time — confirmed directly (one payment-plan lead had 6 records
+-- spanning two weeks, CONTRACTED_VALUE constant at 6000 across all of
+-- them while CASH_COLLECTED filled in progressively, ending at 3500 on
+-- the latest record). This is a snapshot-of-current-state pattern, not
+-- separate incremental payments — so downstream reports need exactly
+-- one row per lead here, and the LATEST record is the correct
+-- snapshot to keep, not a SUM (which would risk double-counting a
+-- cumulative-in-place field) or an arbitrary MAX/MIN. This guarantees
+-- every join to SALES_DETAILS on LEAD_ID is one-to-one, not one-to-many.
+QUALIFY ROW_NUMBER() OVER (PARTITION BY s.LEAD_ID ORDER BY s.ACTIVITY_AT DESC) = 1;
 
 -- ----------------------------------------------------------------------------
 -- OUTBOUND_PROSPECT_DIALS — Requirements Doc Section 6.2, top-of-funnel
