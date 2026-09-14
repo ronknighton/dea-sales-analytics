@@ -171,7 +171,16 @@ SELECT
     s.CASH_COLLECTED
 FROM sales s
 LEFT JOIN DIM_USERS setter ON setter.USER_ID = s.SETTER_USER_ID
-LEFT JOIN DIM_USERS closer ON closer.USER_ID = s.CLOSER_USER_ID;
+LEFT JOIN DIM_USERS closer ON closer.USER_ID = s.CLOSER_USER_ID
+-- CONFIRMED via direct comparison against Avirup's Sept 2 reference
+-- report: 79% of all rows here (1,652 of 2,096) have SALE_STATUS,
+-- CONTRACTED_VALUE, and CASH_COLLECTED all NULL — empty activity stubs,
+-- not real sales (24 fired for one lead within a 12-second span, all
+-- blank). Every downstream report that joins to SALES_DETAILS on
+-- LEAD_ID was fanning out on these — one real strategy call was
+-- duplicating once per blank stub. A real sale event should carry at
+-- least one of these three fields; anything with none of them isn't one.
+WHERE NOT (s.SALE_STATUS IS NULL AND s.CONTRACTED_VALUE IS NULL AND s.CASH_COLLECTED IS NULL);
 
 -- ----------------------------------------------------------------------------
 -- OUTBOUND_PROSPECT_DIALS — Requirements Doc Section 6.2, top-of-funnel
