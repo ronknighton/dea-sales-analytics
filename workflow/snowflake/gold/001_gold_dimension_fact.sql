@@ -70,4 +70,15 @@ FROM SILVER.LEAD_ACTIVITIES_PROCESSED lap,
      LATERAL FLATTEN(input => OBJECT_KEYS(lap.FULL_RECORD)) k
 JOIN SILVER.CUSTOM_ACTIVITY_FIELDS caf
     ON k.value::string = 'custom.' || caf.FIELD_ID
-WHERE lap.FULL_RECORD:_type::string = 'CustomActivity';
+WHERE lap.FULL_RECORD:_type::string = 'CustomActivity'
+  -- CRITICAL FIX: several fields are SHARED across activity types (Setter
+  -- on 7 types, Avatar on 6, Lead Quality on 3). Joining to the catalog on
+  -- field id alone attributed every activity to EVERY type owning any of
+  -- its fields — a New Sale with a Setter value also appeared as a Triage
+  -- Call (blank triage outcome), a Strategy Call, etc. Symptoms: identical
+  -- per-type counts for shared fields (Setter = 396 on each of 7 types),
+  -- 37 of 45 "triage" rows with no triage outcome, 23 "sales" among 44
+  -- "triage" calls, ~48% of "strategy calls" with no Closer. Requiring the
+  -- activity's own type id to match the catalog row's type id fixes the
+  -- labeling at the source for every downstream view.
+  AND caf.CUSTOM_ACTIVITY_TYPE_ID = lap.FULL_RECORD:custom_activity_type_id::string;
