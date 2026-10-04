@@ -24,94 +24,128 @@ USE SCHEMA GOLD;
 -- INBOUND_SETTER_REPORT — Requirements Doc Section 6.1
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE VIEW INBOUND_SETTER_REPORT AS
+-- DEFINITIONS CORRECTED against the SME's own reference report. His rate
+-- columns reproduce exactly (checked row by row on his Sept 2 file) as:
+--   show rate           = triage taken / triage booked
+--   set rate            = strategy calls set / triage TAKEN (not booked)
+--   strategy taken      = a SUBSET of set (taken / set), never larger
+--   offer rate          = offered / strategy taken
+-- "Taken" is a TRIAGE-level concept (Requirements 3.1.1 and the Lead B
+-- example: a triage No Show is booked but not taken). The first version
+-- derived it from later strategy-call attendance, which produced
+-- ~99% show rates and "taken" counts larger than "booked".
+-- One row per (date, setter, lead) before aggregating, so a lead with
+-- several triage activities cannot inflate sums.
 WITH triage_base AS (
     SELECT
         LEAD_ID,
         TRIAGE_CALL_DATE::date AS TRIAGE_DATE,
         SETTER_CLOSER_EMAIL AS SETTER,
-        STRATEGY_CALL_BOOKED
+        IFF(STRATEGY_CALL_BOOKED, 1, 0) AS IS_SET,
+        IFF(TRIAGE_CALL_OUTCOME IS NOT NULL
+            AND TRIAGE_CALL_OUTCOME NOT IN ('6. No Show', '7. Reschedule', '8. Cancel'), 1, 0) AS IS_TAKEN
     FROM INBOUND_STRATEGIES_BOOKED
 ),
-strategy_joined AS (
+strategy_per_lead AS (
     SELECT
-        t.LEAD_ID, t.TRIAGE_DATE, t.SETTER, t.STRATEGY_CALL_BOOKED,
-        s.STATUS AS STRATEGY_STATUS,
-        s.OFFER_PRESENTED
-    FROM triage_base t
-    LEFT JOIN ALL_STRATEGIES_DETAILS s ON s.LEAD_ID = t.LEAD_ID
+        LEAD_ID,
+        MAX(IFF(STATUS = 'ATTENDED', 1, 0)) AS ATTENDED,
+        MAX(IFF(STATUS = 'ATTENDED' AND OFFER_PRESENTED = 'Yes', 1, 0)) AS OFFERED
+    FROM ALL_STRATEGIES_DETAILS
+    GROUP BY LEAD_ID
 ),
-sales_joined AS (
+per_lead AS (
     SELECT
-        sj.*,
-        sd.CONTRACTED_VALUE
-    FROM strategy_joined sj
-    LEFT JOIN SALES_DETAILS sd ON sd.LEAD_ID = sj.LEAD_ID
+        t.TRIAGE_DATE, t.SETTER, t.LEAD_ID,
+        MAX(t.IS_TAKEN) AS IS_TAKEN,
+        MAX(t.IS_SET) AS IS_SET,
+        MAX(COALESCE(s.ATTENDED, 0)) AS ATTENDED,
+        MAX(COALESCE(s.OFFERED, 0)) AS OFFERED,
+        MAX(TRY_CAST(sd.CONTRACTED_VALUE AS FLOAT)) AS CONTRACT_VALUE
+    FROM triage_base t
+    LEFT JOIN strategy_per_lead s ON s.LEAD_ID = t.LEAD_ID
+    LEFT JOIN SALES_DETAILS sd ON sd.LEAD_ID = t.LEAD_ID
+    GROUP BY t.TRIAGE_DATE, t.SETTER, t.LEAD_ID
 )
 SELECT
     TRIAGE_DATE,
     SETTER,
-    COUNT(DISTINCT LEAD_ID) AS INBOUND_BOOKED,
-    COUNT(DISTINCT CASE WHEN STRATEGY_STATUS = 'ATTENDED' THEN LEAD_ID END) AS INBOUND_TAKEN,
-    ROUND(COUNT(DISTINCT CASE WHEN STRATEGY_STATUS = 'ATTENDED' THEN LEAD_ID END)
-        / NULLIF(COUNT(DISTINCT LEAD_ID), 0) * 100, 1) AS SHOW_RATE,
-    ROUND(COUNT(DISTINCT CASE WHEN STRATEGY_CALL_BOOKED THEN LEAD_ID END)
-        / NULLIF(COUNT(DISTINCT LEAD_ID), 0) * 100, 1) AS TRIAGE_SET_RATE,
-    COUNT(DISTINCT CASE WHEN STRATEGY_CALL_BOOKED THEN LEAD_ID END) AS STRATEGY_CALL_BOOKED,
-    COUNT(DISTINCT CASE WHEN STRATEGY_STATUS = 'ATTENDED' THEN LEAD_ID END) AS STRATEGY_CALL_TAKEN,
-    -- Previously omitted despite being explicitly documented in both
-    -- Section 6.1's narrative ("Offer Rate") and the Snowflake PDF's
-    -- Export Layer column list for this exact report — a real build
-    -- gap, not a documentation gap, caught during report comparison.
-    -- Denominator matches the same pattern already used for SALE_RATE:
-    -- rate relative to strategy calls actually attended.
-    ROUND(COUNT(DISTINCT CASE WHEN OFFER_PRESENTED = 'Yes' THEN LEAD_ID END)
-        / NULLIF(COUNT(DISTINCT CASE WHEN STRATEGY_STATUS = 'ATTENDED' THEN LEAD_ID END), 0) * 100, 1) AS OFFER_RATE,
-    COUNT(DISTINCT CASE WHEN CONTRACTED_VALUE IS NOT NULL THEN LEAD_ID END) AS TOTAL_SALES,
-    ROUND(COUNT(DISTINCT CASE WHEN CONTRACTED_VALUE IS NOT NULL THEN LEAD_ID END)
-        / NULLIF(COUNT(DISTINCT CASE WHEN STRATEGY_STATUS = 'ATTENDED' THEN LEAD_ID END), 0) * 100, 1) AS SALE_RATE,
-    ROUND(SUM(TRY_CAST(CONTRACTED_VALUE AS FLOAT))
-        / NULLIF(COUNT(DISTINCT CASE WHEN CONTRACTED_VALUE IS NOT NULL THEN LEAD_ID END), 0), 2) AS AVERAGE_ORDER_VALUE
-FROM sales_joined
+    COUNT(*) AS INBOUND_BOOKED,
+    SUM(IS_TAKEN) AS INBOUND_TAKEN,
+    ROUND(SUM(IS_TAKEN) / NULLIF(COUNT(*), 0) * 100, 1) AS SHOW_RATE,
+    ROUND(SUM(IS_SET) / NULLIF(SUM(IS_TAKEN), 0) * 100, 1) AS TRIAGE_SET_RATE,
+    SUM(IS_SET) AS STRATEGY_CALL_BOOKED,
+    SUM(IFF(IS_SET = 1 AND ATTENDED = 1, 1, 0)) AS STRATEGY_CALL_TAKEN,
+    ROUND(SUM(IFF(IS_SET = 1 AND ATTENDED = 1 AND OFFERED = 1, 1, 0))
+        / NULLIF(SUM(IFF(IS_SET = 1 AND ATTENDED = 1, 1, 0)), 0) * 100, 1) AS OFFER_RATE,
+    SUM(IFF(IS_SET = 1 AND ATTENDED = 1 AND CONTRACT_VALUE IS NOT NULL, 1, 0)) AS TOTAL_SALES,
+    ROUND(SUM(IFF(IS_SET = 1 AND ATTENDED = 1 AND CONTRACT_VALUE IS NOT NULL, 1, 0))
+        / NULLIF(SUM(IFF(IS_SET = 1 AND ATTENDED = 1, 1, 0)), 0) * 100, 1) AS SALE_RATE,
+    ROUND(SUM(IFF(IS_SET = 1 AND ATTENDED = 1 AND CONTRACT_VALUE IS NOT NULL, CONTRACT_VALUE, 0))
+        / NULLIF(SUM(IFF(IS_SET = 1 AND ATTENDED = 1 AND CONTRACT_VALUE IS NOT NULL, 1, 0)), 0), 2) AS AVERAGE_ORDER_VALUE
+FROM per_lead
 GROUP BY TRIAGE_DATE, SETTER;
 
 -- ----------------------------------------------------------------------------
 -- OUTBOUND_SETTER_REPORT — Requirements Doc Section 6.2
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE VIEW OUTBOUND_SETTER_REPORT AS
+-- DEFINITIONS CORRECTED against the SME's reference report (his rate
+-- columns reproduce exactly): dial-to-set = set / TOTAL DIALS (not
+-- distinct leads); set-to-show = shown / set; offer rate = offered /
+-- shown. Shown, offered and sold are all restricted to leads that were
+-- actually SET, so each stage is a subset of the one before it.
+-- TOTAL_OFFER added: listed in the PDF's export columns, omitted in the
+-- first version. NOTE: "calls" here are logged prospecting activities;
+-- the SME's dial counts (e.g. 22,236 on Sept 2) are raw dialer volume
+-- far beyond the ~819 raw outbound calls in this dataset for that day,
+-- so absolute dial figures cannot be reproduced from this source.
 WITH dials_base AS (
-    SELECT LEAD_ID, ACTIVITY_LOG_DATE::date AS DIAL_DATE, SETTER_CLOSER_EMAIL AS SETTER, STATUS
+    SELECT
+        LEAD_ID,
+        ACTIVITY_LOG_DATE::date AS DIAL_DATE,
+        SETTER_CLOSER_EMAIL AS SETTER,
+        IFF(STATUS = 'SET', 1, 0) AS IS_SET
     FROM OUTBOUND_PROSPECT_DIALS
 ),
-strategy_joined AS (
+strategy_per_lead AS (
     SELECT
-        d.LEAD_ID, d.DIAL_DATE, d.SETTER, d.STATUS AS DIAL_STATUS,
-        s.STATUS AS STRATEGY_STATUS
-    FROM dials_base d
-    LEFT JOIN ALL_STRATEGIES_DETAILS s ON s.LEAD_ID = d.LEAD_ID
+        LEAD_ID,
+        MAX(IFF(STATUS = 'ATTENDED', 1, 0)) AS ATTENDED,
+        MAX(IFF(STATUS = 'ATTENDED' AND OFFER_PRESENTED = 'Yes', 1, 0)) AS OFFERED
+    FROM ALL_STRATEGIES_DETAILS
+    GROUP BY LEAD_ID
 ),
-sales_joined AS (
-    SELECT sj.*, sd.CONTRACTED_VALUE
-    FROM strategy_joined sj
-    LEFT JOIN SALES_DETAILS sd ON sd.LEAD_ID = sj.LEAD_ID
+per_lead AS (
+    SELECT
+        d.DIAL_DATE, d.SETTER, d.LEAD_ID,
+        COUNT(*) AS CALLS,
+        MAX(d.IS_SET) AS IS_SET,
+        MAX(COALESCE(s.ATTENDED, 0)) AS ATTENDED,
+        MAX(COALESCE(s.OFFERED, 0)) AS OFFERED,
+        MAX(TRY_CAST(sd.CONTRACTED_VALUE AS FLOAT)) AS CONTRACT_VALUE
+    FROM dials_base d
+    LEFT JOIN strategy_per_lead s ON s.LEAD_ID = d.LEAD_ID
+    LEFT JOIN SALES_DETAILS sd ON sd.LEAD_ID = d.LEAD_ID
+    GROUP BY d.DIAL_DATE, d.SETTER, d.LEAD_ID
 )
 SELECT
     DIAL_DATE,
     SETTER,
-    COUNT(*) AS TOTAL_OUTBOUND_CALLS,
-    COUNT(DISTINCT LEAD_ID) AS TOTAL_LEADS_TOUCHED,
-    COUNT(DISTINCT CASE WHEN DIAL_STATUS = 'SET' THEN LEAD_ID END) AS OUTBOUND_SET,
-    COUNT(DISTINCT CASE WHEN STRATEGY_STATUS = 'ATTENDED' THEN LEAD_ID END) AS TOTAL_CLOSER_SHOW,
-    COUNT(DISTINCT CASE WHEN CONTRACTED_VALUE IS NOT NULL THEN LEAD_ID END) AS TOTAL_SALE,
-    ROUND(COUNT(DISTINCT CASE WHEN DIAL_STATUS = 'SET' THEN LEAD_ID END)
-        / NULLIF(COUNT(DISTINCT LEAD_ID), 0) * 100, 1) AS DIAL_TO_SET_RATE,
-    ROUND(COUNT(DISTINCT CASE WHEN STRATEGY_STATUS = 'ATTENDED' THEN LEAD_ID END)
-        / NULLIF(COUNT(DISTINCT CASE WHEN DIAL_STATUS = 'SET' THEN LEAD_ID END), 0) * 100, 1) AS SET_TO_SHOW_RATE,
-    ROUND(COUNT(DISTINCT CASE WHEN CONTRACTED_VALUE IS NOT NULL THEN LEAD_ID END)
-        / NULLIF(COUNT(DISTINCT CASE WHEN STRATEGY_STATUS = 'ATTENDED' THEN LEAD_ID END), 0) * 100, 1) AS SHOW_TO_SALE_RATE,
-    SUM(TRY_CAST(CONTRACTED_VALUE AS FLOAT)) AS TOTAL_REVENUE,
-    ROUND(SUM(TRY_CAST(CONTRACTED_VALUE AS FLOAT))
-        / NULLIF(COUNT(DISTINCT CASE WHEN CONTRACTED_VALUE IS NOT NULL THEN LEAD_ID END), 0), 2) AS AVERAGE_ORDER_VALUE
-FROM sales_joined
+    SUM(CALLS) AS TOTAL_OUTBOUND_CALLS,
+    COUNT(*) AS TOTAL_LEADS_TOUCHED,
+    SUM(IS_SET) AS OUTBOUND_SET,
+    SUM(IFF(IS_SET = 1 AND ATTENDED = 1, 1, 0)) AS TOTAL_CLOSER_SHOW,
+    SUM(IFF(IS_SET = 1 AND ATTENDED = 1 AND OFFERED = 1, 1, 0)) AS TOTAL_OFFER,
+    SUM(IFF(IS_SET = 1 AND ATTENDED = 1 AND CONTRACT_VALUE IS NOT NULL, 1, 0)) AS TOTAL_SALE,
+    ROUND(SUM(IS_SET) / NULLIF(SUM(CALLS), 0) * 100, 1) AS DIAL_TO_SET_RATE,
+    ROUND(SUM(IFF(IS_SET = 1 AND ATTENDED = 1, 1, 0)) / NULLIF(SUM(IS_SET), 0) * 100, 1) AS SET_TO_SHOW_RATE,
+    ROUND(SUM(IFF(IS_SET = 1 AND ATTENDED = 1 AND CONTRACT_VALUE IS NOT NULL, 1, 0))
+        / NULLIF(SUM(IFF(IS_SET = 1 AND ATTENDED = 1, 1, 0)), 0) * 100, 1) AS SHOW_TO_SALE_RATE,
+    SUM(IFF(IS_SET = 1 AND ATTENDED = 1 AND CONTRACT_VALUE IS NOT NULL, CONTRACT_VALUE, 0)) AS TOTAL_REVENUE,
+    ROUND(SUM(IFF(IS_SET = 1 AND ATTENDED = 1 AND CONTRACT_VALUE IS NOT NULL, CONTRACT_VALUE, 0))
+        / NULLIF(SUM(IFF(IS_SET = 1 AND ATTENDED = 1 AND CONTRACT_VALUE IS NOT NULL, 1, 0)), 0), 2) AS AVERAGE_ORDER_VALUE
+FROM per_lead
 GROUP BY DIAL_DATE, SETTER;
 
 -- ----------------------------------------------------------------------------
